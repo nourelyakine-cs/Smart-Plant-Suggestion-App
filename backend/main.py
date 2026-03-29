@@ -31,5 +31,5 @@ def root():
         "version": "1.0.0",
         "status": "running",
         "docs": "/docs",
-        "ai_service": "http://localhost:5001"
+        "ai_service": os.getenv("AI_SERVICE_URL", "http://localhost:5001")
     }
