@@ -1,4 +1,4 @@
-import { Facebook, Instagram, Linkedin } from "lucide-react";
+import { Facebook, Instagram, Linkedin, Leaf } from "lucide-react";
 
 const Footer = () => {
   const scrollToSection = (id: string) => {
@@ -18,20 +18,12 @@ const Footer = () => {
       <div className="container mx-auto grid grid-cols-1 md:grid-cols-3 gap-12 text-[#2D402D]">
         <div className="flex flex-col gap-5">
           <div className="flex items-center gap-3">
-            <svg
-              width="45"
-              height="45"
-              viewBox="0 0 100 100"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M80,20 C50,20 20,50 20,80 C20,80 50,80 80,50 C80,50 80,20 80,20 Z M50,50 L20,80"
-                stroke="#2D402D"
-                strokeWidth="5"
-                fill="#6B8E23"
-              />
-            </svg>
+            <Leaf 
+              size={35} 
+              className="text-[#2D402D]" 
+              fill="#6B8E23" 
+            />
+            
             <h2 className="text-3xl font-serif font-bold tracking-tighter uppercase text-[#2D402D]">
               GREENGUIDE
             </h2>
