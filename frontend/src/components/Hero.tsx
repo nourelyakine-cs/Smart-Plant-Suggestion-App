@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Search, MapPin } from "lucide-react";
+import { Search, MapPin, Loader2 } from "lucide-react";
 import monsteraImg from "@/assets/monstera.png";
 
-const Hero = ({ onSearch }: { onSearch: (city: string) => void }) => {
+const Hero = ({ onSearch, isLoading = false }: { onSearch: (city: string) => void; isLoading?: boolean }) => {
   const [cityInput, setCityInput] = useState("");
 
   const handleButtonClick = () => {
@@ -62,10 +62,11 @@ const Hero = ({ onSearch }: { onSearch: (city: string) => void }) => {
 
                 <button
                   onClick={handleButtonClick}
-                  className="bg-[#2D402D] hover:bg-[#1b2b1b] text-white px-8 h-14 rounded-[22px] font-inria font-bold text-lg transition-all duration-300 active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-[#2D402D]/20 w-full sm:w-auto"
+                  disabled={isLoading}
+                  className="bg-[#2D402D] hover:bg-[#1b2b1b] text-white px-8 h-14 rounded-[22px] font-inria font-bold text-lg transition-all duration-300 active:scale-95 flex items-center justify-center gap-2 shadow-lg shadow-[#2D402D]/20 w-full sm:w-auto disabled:opacity-70 disabled:cursor-not-allowed"
                 >
-                  <Search size={20} />
-                  Get recommendations
+                  {isLoading ? <Loader2 size={20} className="animate-spin" /> : <Search size={20} />}
+                  {isLoading ? "Analyzing..." : "Get recommendations"}
                 </button>
               </div>
             </div>

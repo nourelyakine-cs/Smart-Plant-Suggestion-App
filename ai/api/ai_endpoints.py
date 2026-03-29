@@ -1,6 +1,6 @@
 """
-API Conversationnelle - Gemini Agent avec RAG
-Utilise gemma-3-27b-it (sans system_instruction)
+Smart Plant AI - Flask Service
+Gemini AI + plant DB + weather (no Gemini key needed for suggestions/weather)
 """
 
 from flask import Flask, request, jsonify
@@ -17,29 +17,28 @@ from services.weather_service import WeatherService
 
 app = Flask(__name__)
 app.secret_key = "smart_plant_ai_secret_key_2024"
-CORS(app)
+CORS(app, origins=["*"])
 
-# ============================================
-# CONFIGURATION
-# ============================================
-
-import os
 from dotenv import load_dotenv
-
 load_dotenv()
-GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
-genai.configure(api_key=GEMINI_API_KEY)
 
-# Utiliser gemma-3-27b-it (sans system_instruction)
-# Ce modèle fonctionne bien et ne supporte pas system_instruction
-gemini_model = genai.GenerativeModel('gemma-3-27b-it')
-print("✅ Modèle chargé: gemma-3-27b-it")
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
+gemini_model = None
+
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        gemini_model = genai.GenerativeModel('gemma-3-27b-it')
+        print("✅ Gemini model loaded: gemma-3-27b-it")
+    except Exception as e:
+        print(f"⚠️ Could not load Gemini model: {e}")
+else:
+    print("⚠️ No GEMINI_API_KEY found. Chat will not work. Add it to ai/.env")
 
 db = PlantDatabase()
 weather_service = WeatherService()
-
-# Stockage des conversations
 conversations = {}
+
 
 def get_or_create_conversation(session_id):
     if session_id not in conversations:
@@ -50,72 +49,157 @@ def get_or_create_conversation(session_id):
         }
     return conversations[session_id]
 
-# ============================================
+
+def calculate_match_score(plant, weather):
+    """Score a plant against current weather (max 100)"""
+    score = 0
+    season = weather.get('season', '')
+    temp = weather.get('temperature', 20)
+    humidity = weather.get('humidity', 60)
+
+    # Season match (40 pts)
+    if season in plant.get('seasons', []):
+        score += 40
+
+    # Temperature match (40 pts)
+    t_opt = plant.get('temp_optimal', [15, 25])
+    t_min = plant.get('temp_min', 0)
+    t_max = plant.get('temp_max', 40)
+    if t_opt[0] <= temp <= t_opt[1]:
+        score += 40
+    elif t_min <= temp <= t_max:
+        score += 20
+
+    # Humidity match (20 pts)
+    h_opt = plant.get('humidity_optimal', [50, 70])
+    h_min = plant.get('humidity_min', 20)
+    h_max = plant.get('humidity_max', 90)
+    if h_opt[0] <= humidity <= h_opt[1]:
+        score += 20
+    elif h_min <= humidity <= h_max:
+        score += 10
+
+    return score
+
+
+# ============================================================
 # ENDPOINTS
-# ============================================
+# ============================================================
 
 @app.route('/')
 def home():
     return jsonify({
-        'name': 'Smart Plant AI - Agent Conversationnel',
+        'name': 'Smart Plant AI',
         'version': '3.0',
-        'description': 'Assistant jardinier intelligent',
         'plants_count': db.get_plants_count(),
-        'model': 'gemma-3-27b-it',
+        'ai_chat_available': gemini_model is not None,
         'status': 'running'
     })
 
+
+@app.route('/api/weather/<city>', methods=['GET'])
+def get_weather(city):
+    """Get real weather for a city (no Gemini needed)"""
+    try:
+        weather = weather_service.get_weather(city)
+        return jsonify(weather)
+    except Exception as e:
+        return jsonify({'error': str(e), 'city': city}), 500
+
+
+@app.route('/api/suggest', methods=['GET'])
+def suggest_plants():
+    """Rule-based plant suggestions from weather (no Gemini needed)"""
+    city = request.args.get('city', '').strip()
+    if not city:
+        return jsonify({'error': 'city parameter is required'}), 400
+
+    try:
+        weather = weather_service.get_weather(city)
+        if 'error' in weather:
+            return jsonify({'error': f'Could not get weather for {city}'}), 400
+
+        all_plants = db.get_all_plants()
+        scored = []
+
+        for key, plant in all_plants.items():
+            score = calculate_match_score(plant, weather)
+            if score > 0:
+                scored.append({
+                    'key': key,
+                    'name': plant['name'],
+                    'scientific_name': plant.get('scientific_name', ''),
+                    'category': plant.get('category', ''),
+                    'difficulty': plant.get('difficulty', ''),
+                    'water_needs': plant.get('water_needs', ''),
+                    'sun_needs': plant.get('sun_needs', ''),
+                    'seasons': plant.get('seasons', []),
+                    'temp_min': plant.get('temp_min', 0),
+                    'temp_max': plant.get('temp_max', 40),
+                    'temp_optimal': plant.get('temp_optimal', [15, 25]),
+                    'description': plant.get('description', ''),
+                    'care_tips': plant.get('care_tips', []),
+                    'match_score': score
+                })
+
+        scored.sort(key=lambda x: x['match_score'], reverse=True)
+        top = scored[:6]
+
+        return jsonify({
+            'city': weather.get('city', city),
+            'weather': weather,
+            'plants': top,
+            'total_matched': len(scored),
+            'showing': len(top)
+        })
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/chat', methods=['POST'])
 def chat():
+    if not gemini_model:
+        return jsonify({
+            'success': False,
+            'response': '⚠️ AI chat is not configured. Please add your GEMINI_API_KEY to ai/.env and restart the AI server.'
+        }), 503
+
     try:
         data = request.json
-        user_message = data.get('message', '')
+        user_message = data.get('message', '').strip()
         session_id = data.get('session_id', 'default')
-        
+
         if not user_message:
-            return jsonify({'error': 'Message vide'}), 400
-        
+            return jsonify({'error': 'Empty message'}), 400
+
         conv = get_or_create_conversation(session_id)
-        
-        # ==========================================
-        # ÉTAPE 1: Vérifier si c'est une question de jardinage
-        # ==========================================
-        is_gardening_prompt = f"""
-        Question: "{user_message}"
-        Est-ce que cette question concerne le jardinage ou les plantes ?
-        Réponds uniquement par "oui" ou "non".
-        """
-        
+
+        # Check if gardening-related
         try:
-            is_gardening_response = gemini_model.generate_content(is_gardening_prompt)
-            is_gardening = is_gardening_response.text.strip().lower() == "oui"
+            check = gemini_model.generate_content(
+                f'Question: "{user_message}"\nIs this about gardening or plants? Answer only "oui" or "non".'
+            )
+            is_gardening = check.text.strip().lower() == "oui"
         except:
             is_gardening = True
-        
+
         if not is_gardening:
             return jsonify({
-                'response': "🌿 Je suis un assistant jardinier spécialisé. Je ne peux répondre qu'aux questions sur les plantes, le jardinage, et les conseils de culture. Posez-moi une question sur les plantes !",
-                'context': {'gardening_only': True}
+                'success': True,
+                'response': "🌿 I'm a specialized gardening assistant. I can only answer questions about plants and gardening. Ask me about plants!"
             })
-        
-        # ==========================================
-        # ÉTAPE 2: Extraire la ville
-        # ==========================================
-        extract_city_prompt = f"""
-        Message: "{user_message}"
-        Extrais le nom de la ville dans ce message.
-        Si aucune ville n'est mentionnée, réponds "aucune".
-        """
-        
+
+        # Extract city
         try:
-            city_response = gemini_model.generate_content(extract_city_prompt)
-            city = city_response.text.strip().lower()
+            city_resp = gemini_model.generate_content(
+                f'Message: "{user_message}"\nExtract the city name. If none, answer "aucune".'
+            )
+            city = city_resp.text.strip().lower()
         except:
             city = "aucune"
-        
-        # ==========================================
-        # ÉTAPE 3: Récupérer la météo
-        # ==========================================
+
+        # Get weather
         weather = None
         if city and city != "aucune":
             weather = weather_service.get_weather(city)
@@ -124,102 +208,75 @@ def chat():
                 conv['last_weather'] = weather
         elif conv['last_weather']:
             weather = conv['last_weather']
-        
-        # ==========================================
-        # ÉTAPE 4: Récupérer TOUTES les plantes
-        # ==========================================
+
         all_plants_info = db.get_plants_info_for_gemini()
-        
-        # ==========================================
-        # ÉTAPE 5: Construire le contexte
-        # ==========================================
+
         context = ""
         if weather and 'error' not in weather:
-            context = f"""
-CONTEXTE MÉTÉO ACTUEL:
-- Ville: {weather['city']}
-- Température: {weather['temperature']}°C
-- Humidité: {weather['humidity']}%
-- Saison: {weather['season']}
+            context = f"""CURRENT WEATHER:
+- City: {weather['city']}
+- Temperature: {weather['temperature']}°C
+- Humidity: {weather['humidity']}%
+- Season: {weather['season']}
 """
-        
+
         history = ""
         if conv['history']:
-            history = "HISTORIQUE DE LA CONVERSATION:\n"
+            history = "CONVERSATION HISTORY:\n"
             for h in conv['history'][-3:]:
-                history += f"User: {h['user']}\nAssistant: {h['assistant'][:100]}...\n"
-        
-        # ==========================================
-        # ÉTAPE 6: Générer la réponse
-        # ==========================================
-        prompt = f"""
-{context}
+                history += f"User: {h['user']}\nAssistant: {h['assistant'][:120]}...\n"
 
+        prompt = f"""{context}
 {history}
-
-🌿 MA BASE DE DONNÉES ({db.get_plants_count()} plantes):
+🌿 PLANT DATABASE ({db.get_plants_count()} plants):
 {all_plants_info}
 
-👤 QUESTION DE L'UTILISATEUR: {user_message}
+User question: {user_message}
 
-🎯 INSTRUCTIONS:
-1. Tu es un assistant jardinier expert.
-2. Utilise  les plantes de MA base de données en prioritaires et aprés tu peux suggerer des autres plantes.
-3. Si l'utilisateur demande une plante spécifique, vérifie si elle est dans la base sinon tu peux aussi repondre.
-4. Utilise la météo si disponible pour contextualiser.
-5. Donne des conseils précis et chaleureux.
-6. Réponds EN FRANÇAIS.
-7. Si la question est vague, propose des suggestions.
-8. Ne dit jamais aux utilsateurs si des données figure dans la bdd ou nom
-9.ne dit pas au utilsateurs les phrase selon mon base de données
-10.ne dit pas au utilsateur si la plante figure ou nom repond diretement
-11.en réponse utilises des émojies de plantes
+Instructions:
+- You are an expert gardening assistant.
+- Use the plant database as primary reference.
+- Use weather context if available.
+- Give precise, warm advice.
+- Respond in the same language as the user's question (French if French, English if English).
+- Use plant emojis 🌱🌿🌸.
+- Never mention the database to the user.
 
-
-RÉPONSE EN FRANÇAIS:
+RESPONSE:
 """
-        
+
         response = gemini_model.generate_content(prompt)
-        
-        # Sauvegarder l'historique
+
         conv['history'].append({
             'user': user_message,
             'assistant': response.text,
             'timestamp': datetime.now().isoformat()
         })
-        
         if len(conv['history']) > 10:
             conv['history'] = conv['history'][-10:]
-        
+
         return jsonify({
             'success': True,
             'response': response.text,
             'context': {
                 'city': weather['city'] if weather and 'error' not in weather else conv['last_city'],
-                'temperature': weather['temperature'] if weather and 'error' not in weather else None,
-                'humidity': weather['humidity'] if weather and 'error' not in weather else None,
-                'season': weather['season'] if weather and 'error' not in weather else None,
-                'plants_in_db': db.get_plants_count(),
-                'model': 'gemma-3-27b-it'
+                'temperature': weather.get('temperature') if weather and 'error' not in weather else None,
+                'season': weather.get('season') if weather and 'error' not in weather else None,
             }
         })
-        
+
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        return jsonify({'error': str(e), 'success': False}), 500
+
 
 @app.route('/api/clear', methods=['POST'])
 def clear_conversation():
     data = request.json
     session_id = data.get('session_id', 'default')
-    
     if session_id in conversations:
-        conversations[session_id] = {
-            'history': [],
-            'last_city': None,
-            'last_weather': None
-        }
-    
-    return jsonify({'success': True, 'message': 'Conversation effacée'})
+        conversations[session_id] = {'history': [], 'last_city': None, 'last_weather': None}
+    return jsonify({'success': True})
+
 
 @app.route('/api/plants', methods=['GET'])
 def list_plants():
@@ -230,26 +287,21 @@ def list_plants():
         'categories': list(set(p['category'] for p in plants.values()))
     })
 
+
 @app.route('/api/plant/<name>', methods=['GET'])
 def get_plant(name):
     plant = db.get_plant(name)
     if plant:
         return jsonify(plant)
-    return jsonify({'error': 'Plante non trouvée'}), 404
+    return jsonify({'error': 'Plant not found'}), 404
+
 
 if __name__ == '__main__':
-    print("=" * 60)
-    print("🌱 SMART PLANT AI - AGENT CONVERSATIONNEL")
-    print("=" * 60)
-    print(f"📊 {db.get_plants_count()} plantes dans la base")
-    print(f"🤖 Modèle: gemma-3-27b-it (sans system_instruction)")
-    print(f"💬 Mode: Conversationnel avec RAG")
-    print(f"🚀 Serveur: http://localhost:5001")
-    print("=" * 60)
-    print("\n🎯 Exemples de questions:")
-    print("   - 'Je suis à Paris, que puis-je planter ?'")
-    print("   - 'La tomate pousse-t-elle ici ?'")
-    print("   - 'Conseils pour mon basilic ?'")
-    print("   - 'Quelle plante résiste à la sécheresse ?'")
-    print("=" * 60)
+    print("=" * 55)
+    print("🌱 SMART PLANT AI SERVICE")
+    print("=" * 55)
+    print(f"📊 {db.get_plants_count()} plants in database")
+    print(f"🤖 AI Chat: {'✅ Ready' if gemini_model else '❌ No GEMINI_API_KEY'}")
+    print(f"🚀 Running at: http://localhost:5001")
+    print("=" * 55)
     app.run(debug=True, port=5001)

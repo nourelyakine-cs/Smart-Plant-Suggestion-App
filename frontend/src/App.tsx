@@ -5,8 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
-import ChatBot from "./components/ChatBot";
 
+// ChatBot is rendered inside Index.tsx — no need to render it here too
 const queryClient = new QueryClient();
 
 const App = () => (
@@ -19,8 +19,6 @@ const App = () => (
           <Route path="/" element={<Index />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
-
-        <ChatBot />
       </BrowserRouter>
     </TooltipProvider>
   </QueryClientProvider>
